@@ -12,6 +12,9 @@ struct DnsStats {
   uint32_t timeouts;  // queries that got no upstream answer within 2 s
   uint32_t dropped;   // malformed, or the in-flight table was full
   uint32_t inflight;
+  uint32_t cache_hits;     // answered from the upstream answer cache
+  uint32_t cache_entries;  // answers held now
+  uint32_t cache_bytes;    // cache size, 0 when off
   const char *upstream;
   bool nxdomain;
 };

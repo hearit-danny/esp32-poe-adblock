@@ -3,12 +3,14 @@
 #include <Arduino.h>
 #include <AsyncUDP.h>
 #include <Preferences.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <string.h>
 
 #include "blocklist.h"
+#include "fnv.h"
 
 // Blocked answers: 0.0.0.0 / :: by default, NXDOMAIN with -DDNS_BLOCK_NXDOMAIN=1.
 // The admin page can flip it at runtime; the choice is kept in NVS.
@@ -19,6 +21,15 @@
 #ifndef DNS_BLOCKED_TTL
 #define DNS_BLOCKED_TTL 10
 #endif
+// Upstream answer cache: RAM for cached answers (0 turns it off) and the
+// longest an answer is kept, whatever its TTL says.
+#ifndef DNS_CACHE_BYTES
+#define DNS_CACHE_BYTES 24576
+#endif
+#ifndef DNS_CACHE_MAX_TTL
+#define DNS_CACHE_MAX_TTL 3600
+#endif
+static_assert(DNS_CACHE_BYTES <= 65535, "cache offsets are 16-bit");
 
 static constexpr uint16_t DNS_PORT = 53;
 static constexpr size_t HDR = 12;
@@ -33,6 +44,8 @@ static constexpr uint32_t TIMEOUT_MS = 2000;  // give up on the query
 static constexpr uint8_t FAILS_TO_SWITCH = 3;
 static constexpr uint32_t PRIMARY_RETRY_MS = 60000;
 static constexpr int TX_QUEUE = 32;
+static constexpr int CACHE_ENTRIES = 256;
+static constexpr size_t CACHE_MIN_FREE_HEAP = 65536;  // left for TCP, uploads and OTA
 
 static const IPAddress UPSTREAMS[2] = {IPAddress(1, 1, 1, 1), IPAddress(8, 8, 8, 8)};
 static const char *const UPSTREAM_NAMES[2] = {"1.1.1.1", "8.8.8.8"};
@@ -60,6 +73,16 @@ struct Outgoing {
   bool upstream;
 };
 
+// A cached upstream answer in g_cache. len 0 marks a free entry.
+struct CacheEntry {
+  uint32_t key;  // cache_key() of the question and query flags
+  uint32_t stored_ms;
+  uint32_t ttl_ms;
+  uint16_t off;
+  uint16_t len;
+  uint8_t flags;  // query_flags() of the query that fetched it
+};
+
 static AsyncUDP g_server;    // port 53, talks to clients
 static AsyncUDP g_upstream;  // ephemeral port, talks to 1.1.1.1 / 8.8.8.8
 static SemaphoreHandle_t g_lock;
@@ -70,6 +93,11 @@ static uint8_t g_fails[2];
 static uint32_t g_switched_ms;
 static bool g_nxdomain = DNS_BLOCK_NXDOMAIN;
 static DnsStats g_stats;
+// Answers are written into g_cache as a ring, overwriting the oldest bytes.
+static uint8_t *g_cache;
+static size_t g_cache_size;
+static size_t g_cache_head;
+static CacheEntry g_entries[CACHE_ENTRIES];
 
 static inline uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] << 8 | p[1]); }
 static inline void wr16(uint8_t *p, uint16_t v) {
@@ -81,23 +109,29 @@ static inline void wr16(uint8_t *p, uint16_t v) {
 // blocks the lwIP thread (holding the TCP/IP core lock) until async_udp takes
 // the packet off its 32-entry queue, while writeTo() needs that core lock: a
 // send from async_udp with the queue full would deadlock the network stack.
-// So handlers queue a copy without waiting and this task does the writeTo.
-static void queue_send(bool upstream, const uint8_t *data, size_t len, const IPAddress &ip, uint16_t port) {
+// So handlers queue a buffer without waiting and this task does the writeTo.
+// queue_owned() takes a malloc'd buffer; queue_send() queues a copy.
+static void queue_owned(bool upstream, uint8_t *buf, size_t len, const IPAddress &ip, uint16_t port) {
   Outgoing o;
-  o.buf = (uint8_t *)malloc(len);
-  if (!o.buf) {
-    g_stats.dropped++;
-    return;
-  }
-  memcpy(o.buf, data, len);
+  o.buf = buf;
   o.len = len;
   o.port = port;
   o.ip = (uint32_t)ip;
   o.upstream = upstream;
   if (xQueueSend(g_txq, &o, 0) != pdPASS) {
-    free(o.buf);
+    free(buf);
     g_stats.dropped++;
   }
+}
+
+static void queue_send(bool upstream, const uint8_t *data, size_t len, const IPAddress &ip, uint16_t port) {
+  uint8_t *buf = (uint8_t *)malloc(len);
+  if (!buf) {
+    g_stats.dropped++;
+    return;
+  }
+  memcpy(buf, data, len);
+  queue_owned(upstream, buf, len, ip, port);
 }
 
 static void tx_task(void *) {
@@ -144,16 +178,161 @@ static size_t skip_name(const uint8_t *m, size_t len, size_t pos) {
   return 0;
 }
 
-// Lowers the OPT record's UDP payload size to MAX_UDP_PAYLOAD.
-static void clamp_edns(uint8_t *m, size_t len, size_t qend) {
+// Offset of the OPT record's TYPE field, or 0 if the message has none.
+static size_t find_opt(const uint8_t *m, size_t len, size_t qend) {
   size_t pos = qend;
   unsigned rrs = rd16(m + 6) + rd16(m + 8) + rd16(m + 10);
   while (rrs--) {
     pos = skip_name(m, len, pos);
-    if (!pos || pos + 10 > len) return;
-    if (rd16(m + pos) == 41 && rd16(m + pos + 2) > MAX_UDP_PAYLOAD) wr16(m + pos + 2, MAX_UDP_PAYLOAD);
+    if (!pos || pos + 10 > len) return 0;
+    if (rd16(m + pos) == 41) return pos;
     pos += 10 + rd16(m + pos + 8);
   }
+  return 0;
+}
+
+// Lowers the OPT record's UDP payload size to MAX_UDP_PAYLOAD.
+static void clamp_edns(uint8_t *m, size_t len, size_t qend) {
+  size_t opt = find_opt(m, len, qend);
+  if (opt && rd16(m + opt + 2) > MAX_UDP_PAYLOAD) wr16(m + opt + 2, MAX_UDP_PAYLOAD);
+}
+
+// Query bits that change the answer: RD, CD, EDNS present, DO.
+static uint8_t query_flags(const uint8_t *m, size_t len, size_t qend) {
+  uint8_t f = (m[2] & 0x01) | ((m[3] & 0x10) ? 2 : 0);
+  size_t opt = find_opt(m, len, qend);
+  if (opt) f |= 4 | ((m[opt + 6] & 0x80) ? 8 : 0);
+  return f;
+}
+
+// Question byte i, lowercased within the name (not in QTYPE/QCLASS).
+static inline uint8_t folded(const uint8_t *m, size_t i, size_t qend) {
+  uint8_t c = m[i];
+  return (i < qend - 4 && c >= 'A' && c <= 'Z') ? c + 32 : c;
+}
+
+static uint32_t cache_key(const uint8_t *m, size_t qend, uint8_t flags) {
+  uint64_t h = FNV_OFFSET_BASIS;
+  for (size_t i = HDR; i < qend; i++) h = (h ^ folded(m, i, qend)) * FNV_PRIME;
+  h = (h ^ flags) * FNV_PRIME;
+  return (uint32_t)(h ^ (h >> 32));
+}
+
+static bool same_question(const uint8_t *a, const uint8_t *b, size_t qend) {
+  for (size_t i = HDR; i < qend; i++)
+    if (folded(a, i, qend) != folded(b, i, qend)) return false;
+  return true;
+}
+
+// Walks the records after the question, skipping OPT. Returns the smallest
+// TTL, or 0 if there is no record or one does not parse. A nonzero age_s is
+// subtracted from every TTL.
+static uint32_t walk_ttls(uint8_t *m, size_t len, size_t qend, uint32_t age_s) {
+  size_t pos = qend;
+  unsigned rrs = rd16(m + 6) + rd16(m + 8) + rd16(m + 10);
+  uint32_t min = UINT32_MAX;
+  while (rrs--) {
+    pos = skip_name(m, len, pos);
+    if (!pos || pos + 10 > len) return 0;
+    if (rd16(m + pos) != 41) {
+      uint8_t *t = m + pos + 4;
+      uint32_t ttl = (uint32_t)t[0] << 24 | (uint32_t)t[1] << 16 | (uint32_t)t[2] << 8 | t[3];
+      if (ttl < min) min = ttl;
+      if (age_s) {
+        ttl = ttl > age_s ? ttl - age_s : 0;
+        t[0] = ttl >> 24;
+        t[1] = ttl >> 16;
+        t[2] = ttl >> 8;
+        t[3] = ttl;
+      }
+    }
+    pos += 10 + rd16(m + pos + 8);
+    if (pos > len) return 0;
+  }
+  return min == UINT32_MAX ? 0 : min;
+}
+
+static bool live(const CacheEntry &e, uint32_t now) { return e.len && now - e.stored_ms < e.ttl_ms; }
+
+// Keeps an upstream answer for the query in slot s. Only complete NOERROR
+// and NXDOMAIN answers with a TTL are kept.
+static void cache_put_locked(uint8_t *msg, size_t len, const Slot &s) {
+  if (!g_cache || !s.qend || len > g_cache_size) return;
+  uint8_t rcode = msg[3] & 0x0F;
+  if ((msg[2] & 0x02) || (rcode != 0 && rcode != 3)) return;
+  uint32_t ttl = walk_ttls(msg, len, s.qend, 0);
+  if (!ttl) return;
+  if (ttl > DNS_CACHE_MAX_TTL) ttl = DNS_CACHE_MAX_TTL;
+  uint8_t flags = query_flags(s.query, s.len, s.qend);
+  uint32_t key = cache_key(s.query, s.qend, flags);
+  if (g_cache_head + len > g_cache_size) g_cache_head = 0;
+  size_t start = g_cache_head, end = start + len;
+  uint32_t now = millis();
+  CacheEntry *slot = nullptr, *oldest = nullptr;
+  for (CacheEntry &e : g_entries) {
+    // Drop entries whose bytes this answer overwrites, and older copies.
+    if (e.len && ((e.off < end && e.off + e.len > start) || (e.key == key && e.flags == flags))) e.len = 0;
+    if (!live(e, now)) {
+      if (!slot) slot = &e;
+    } else if (!oldest || (int32_t)(e.stored_ms - oldest->stored_ms) < 0) {
+      oldest = &e;
+    }
+  }
+  if (!slot) slot = oldest;
+  memcpy(g_cache + start, msg, len);
+  slot->key = key;
+  slot->stored_ms = now;
+  slot->ttl_ms = ttl * 1000;
+  slot->off = start;
+  slot->len = len;
+  slot->flags = flags;
+  g_cache_head = end;
+}
+
+// Answers the query from the cache, with TTLs lowered by the time the answer
+// has been held. Returns false on a miss.
+static bool cache_answer(const uint8_t *q, size_t len, size_t qend, const IPAddress &ip, uint16_t port) {
+  if (!g_cache || !qend) return false;
+  uint8_t flags = query_flags(q, len, qend);
+  uint32_t key = cache_key(q, qend, flags);
+  size_t opt = find_opt(q, len, qend);
+  size_t limit = opt && rd16(q + opt + 2) > 512 ? rd16(q + opt + 2) : 512;
+  uint8_t *buf = nullptr;
+  size_t n = 0;
+  uint32_t age_s = 0;
+  xSemaphoreTake(g_lock, portMAX_DELAY);
+  uint32_t now = millis();
+  for (CacheEntry &e : g_entries) {
+    if (!e.len || e.key != key || e.flags != flags) continue;
+    const uint8_t *r = g_cache + e.off;
+    if (!live(e, now) || e.len > limit || e.len < qend || !same_question(r, q, qend)) break;
+    buf = (uint8_t *)malloc(e.len);
+    if (buf) {
+      memcpy(buf, r, e.len);
+      n = e.len;
+      age_s = (now - e.stored_ms) / 1000;
+      g_stats.cache_hits++;
+    }
+    break;
+  }
+  xSemaphoreGive(g_lock);
+  if (!buf) return false;
+  memcpy(buf, q, 2);                       // the client's id
+  memcpy(buf + HDR, q + HDR, qend - HDR);  // and its spelling of the name
+  if (age_s) walk_ttls(buf, n, qend, age_s);
+  queue_owned(false, buf, n, ip, port);
+  return true;
+}
+
+// Takes what RAM can spare after the Bloom filter, up to DNS_CACHE_BYTES.
+static void cache_begin() {
+  size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  size_t size = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (size > DNS_CACHE_BYTES) size = DNS_CACHE_BYTES;
+  if (free_heap < CACHE_MIN_FREE_HEAP + size) size = free_heap > CACHE_MIN_FREE_HEAP ? free_heap - CACHE_MIN_FREE_HEAP : 0;
+  if (size >= 4096) g_cache = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_8BIT);
+  g_cache_size = g_cache ? size : 0;
+  Serial.printf("[dns] answer cache %u bytes%s\n", (unsigned)g_cache_size, g_cache ? "" : " (off)");
 }
 
 static void send_blocked(const uint8_t *q, size_t qend, uint16_t qtype, const IPAddress &ip, uint16_t port) {
@@ -285,6 +464,7 @@ static void on_client_packet(AsyncUDPPacket &p) {
     send_blocked(q, qend, qtype, p.remoteIP(), p.remotePort());
     return;
   }
+  if (qend && cache_answer(q, len, qend, p.remoteIP(), p.remotePort())) return;
   forward(q, len, qend, p.remoteIP(), p.remotePort());
 }
 
@@ -305,6 +485,7 @@ static void on_upstream_packet(AsyncUDPPacket &p) {
     if (!s.used || s.up_id != id) continue;
     if (s.qend && (len < s.qend || memcmp(msg + HDR, s.query + HDR, s.qend - HDR) != 0)) break;
     g_fails[u] = 0;
+    cache_put_locked(msg, len, s);
     wr16(msg, s.client_id);  // restore the client's id in place
     queue_send(false, msg, len, s.client_ip, s.client_port);
     s.used = false;
@@ -323,6 +504,7 @@ void dns_begin() {
     g_nxdomain = prefs.getBool("nxdomain", DNS_BLOCK_NXDOMAIN);
     prefs.end();
   }
+  cache_begin();
   if (!g_upstream.listen(0)) Serial.println("[dns] upstream socket failed");
   g_upstream.onPacket(on_upstream_packet);
   if (!g_server.listen(DNS_PORT)) Serial.println("[dns] listen on 53 failed");
@@ -362,6 +544,11 @@ DnsStats dns_stats() {
   uint32_t n = 0;
   for (int i = 0; i < SLOTS; i++) n += g_slots[i].used;
   s.inflight = n;
+  uint32_t now = millis();
+  n = 0;
+  for (const CacheEntry &e : g_entries) n += live(e, now);
+  s.cache_entries = n;
+  s.cache_bytes = g_cache_size;
   s.upstream = UPSTREAM_NAMES[g_cur];
   s.nxdomain = g_nxdomain;
   xSemaphoreGive(g_lock);
