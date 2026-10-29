@@ -116,6 +116,9 @@ nslookup example.com 192.168.1.159
 Expected: real addresses from upstream. In both, `Server: UnKnown` is normal; nslookup asks
 for the PTR record of 192.168.1.159 first and the public resolvers have none.
 
+Run the `example.com` lookup twice: the second answer comes from the cache, so the
+status page's Answer cache row shows one more hit and the TTL is a little lower.
+
 ## How it works
 
 - **Hash.** FNV-1a 64-bit over the normalised name (lowercase, no trailing dot), xor-folded
@@ -144,6 +147,14 @@ for the PTR record of 192.168.1.159 first and the public resolvers have none.
   1 s: resend to the other upstream. No answer in 2 s: drop. Three failures in a row switch
   the upstream in use; the primary is retried after 60 s. The EDNS UDP size is capped at
   1232 so answers fit one Ethernet frame.
+- **Answer cache.** Complete NOERROR and NXDOMAIN answers are kept for their smallest TTL,
+  at most 1 hour (`-DDNS_CACHE_MAX_TTL`). A repeat question is answered from RAM with the
+  client's id and spelling of the name, and every TTL lowered by the time held. Answers are
+  keyed on the question plus the RD, CD, EDNS and DO bits, so an EDNS answer never goes to a
+  client that sent none. The store is a 24 KB ring (`-DDNS_CACHE_BYTES`, 0 turns it off)
+  with up to 256 answers, allocated after the Bloom filter and shrunk if that would leave
+  under 64 KB of heap. Blocked names are checked first, so a list upload takes effect at
+  once. The status page shows hits and answers held.
 - **Sending.** All DNS packets go out from a `dns_tx` task, never from the AsyncUDP
   receive task, which would deadlock the lwIP core lock when the receive queue is full.
 - **Block mode.** 0.0.0.0 / :: by default (`-DDNS_BLOCK_NXDOMAIN=0` in `platformio.ini`).
@@ -155,7 +166,7 @@ for the PTR record of 192.168.1.159 first and the public resolvers have none.
 ## Limits
 
 - Basic auth over plain HTTP: the password crosses the LAN unencrypted on each admin request.
-- No cache of upstream answers yet; every allowed query goes upstream.
+- The answer cache lives in RAM only, so a reboot or firmware update empties it.
 - DNS listens on IPv4 UDP only. No TCP/53, so a client cannot retry a truncated answer
   over TCP here; it usually falls back to another resolver.
 - Upstream queries leave from one fixed source port, so spoofing resistance rests on the
