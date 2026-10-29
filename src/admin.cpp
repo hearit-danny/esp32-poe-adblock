@@ -9,6 +9,13 @@
 #include "blocklist.h"
 #include "dns.h"
 
+// Set by scripts/admin_password.py from ADBLOCK_ADMIN_PASSWORD.
+#ifndef ADMIN_PASSWORD
+#error "ADMIN_PASSWORD is not defined; build through PlatformIO with ADBLOCK_ADMIN_PASSWORD set"
+#endif
+static constexpr const char *ADMIN_USER = "admin";
+static constexpr const char *REALM = "adblocker";
+
 static AsyncWebServer g_server(80);
 static AsyncWebServerRequest *g_upload_owner;  // request that holds the blocklist upload
 static uint32_t g_reboot_at;
@@ -18,6 +25,12 @@ struct UploadCtx {
   const char *err;
   bool done;
 };
+
+// HTTP basic auth. Upload bodies reach the chunk handlers before the request
+// handler runs, so both check it.
+static bool authorized(AsyncWebServerRequest *req) { return req->authenticate(ADMIN_USER, ADMIN_PASSWORD); }
+
+static void ask_login(AsyncWebServerRequest *req) { req->requestAuthentication(REALM, false); }
 
 static UploadCtx *upload_ctx(AsyncWebServerRequest *req) {
   if (!req->_tempObject) req->_tempObject = calloc(1, sizeof(UploadCtx));
@@ -119,6 +132,10 @@ static void on_upload_chunk(AsyncWebServerRequest *req, const String &, size_t i
   UploadCtx *ctx = upload_ctx(req);
   if (!ctx || ctx->err) return;
   if (index == 0) {
+    if (!authorized(req)) {
+      ctx->err = "Login Required";
+      return;
+    }
     if (!blocklist_upload_begin(ctx->err)) return;
     g_upload_owner = req;
     req->onDisconnect([req]() {
@@ -138,6 +155,7 @@ static void on_upload_chunk(AsyncWebServerRequest *req, const String &, size_t i
 }
 
 static void on_upload_done(AsyncWebServerRequest *req) {
+  if (!authorized(req)) return ask_login(req);
   UploadCtx *ctx = (UploadCtx *)req->_tempObject;
   if (ctx && ctx->done) {
     req->send(200, "text/plain", "Blocklist Updated\n" + String(blocklist_info().entry_count) + " entries loaded.\n");
@@ -150,6 +168,10 @@ static void on_update_chunk(AsyncWebServerRequest *req, const String &, size_t i
                             bool final) {
   UploadCtx *ctx = upload_ctx(req);
   if (!ctx || ctx->err) return;
+  if (index == 0 && !authorized(req)) {
+    ctx->err = "Login Required";
+    return;
+  }
   if (index == 0 && !Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
     ctx->err = "No Update Partition";
     return;
@@ -166,6 +188,7 @@ static void on_update_chunk(AsyncWebServerRequest *req, const String &, size_t i
 }
 
 static void on_update_done(AsyncWebServerRequest *req) {
+  if (!authorized(req)) return ask_login(req);
   UploadCtx *ctx = (UploadCtx *)req->_tempObject;
   if (ctx && ctx->done) {
     req->send(200, "text/plain", "Firmware Updated\nRestarting now.\n");
@@ -176,9 +199,16 @@ static void on_update_done(AsyncWebServerRequest *req) {
 }
 
 void admin_begin() {
-  g_server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) { req->send(200, "text/html", status_page()); });
+  // The status page asks for the login too, so the browser already holds the
+  // credentials when its forms POST (otherwise a firmware upload is sent twice).
+  // /stats stays open for read-only monitoring.
+  g_server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
+    if (!authorized(req)) return ask_login(req);
+    req->send(200, "text/html", status_page());
+  });
   g_server.on("/stats", HTTP_GET, [](AsyncWebServerRequest *req) { req->send(200, "application/json", stats_json()); });
   g_server.on("/mode", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!authorized(req)) return ask_login(req);
     if (req->hasParam("nxdomain", true)) dns_set_nxdomain(req->getParam("nxdomain", true)->value() == "1");
     req->redirect("/");
   });
