@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+blocklist.bin
+hosts.txt
+__pycache__/
