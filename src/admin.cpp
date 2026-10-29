@@ -18,6 +18,7 @@ static constexpr const char *REALM = "adblocker";
 
 static AsyncWebServer g_server(80);
 static AsyncWebServerRequest *g_upload_owner;  // request that holds the blocklist upload
+static AsyncWebServerRequest *g_update_owner;  // request that holds the firmware update
 static uint32_t g_reboot_at;
 
 // Per-request upload state in request->_tempObject (freed by the library).
@@ -156,6 +157,10 @@ static void on_upload_chunk(AsyncWebServerRequest *req, const String &, size_t i
 
 static void on_upload_done(AsyncWebServerRequest *req) {
   if (!authorized(req)) return ask_login(req);
+  if (g_upload_owner == req) {  // body ended without a final chunk
+    blocklist_upload_abort();
+    g_upload_owner = nullptr;
+  }
   UploadCtx *ctx = (UploadCtx *)req->_tempObject;
   if (ctx && ctx->done) {
     req->send(200, "text/plain", "Blocklist Updated\n" + String(blocklist_info().entry_count) + " entries loaded.\n");
@@ -164,31 +169,50 @@ static void on_upload_done(AsyncWebServerRequest *req) {
   }
 }
 
+// Aborts an unfinished update owned by `req`; a no-op after Update.end().
+static void release_update(AsyncWebServerRequest *req) {
+  if (g_update_owner != req) return;
+  if (Update.isRunning()) Update.abort();
+  g_update_owner = nullptr;
+}
+
 static void on_update_chunk(AsyncWebServerRequest *req, const String &, size_t index, uint8_t *data, size_t len,
                             bool final) {
   UploadCtx *ctx = upload_ctx(req);
   if (!ctx || ctx->err) return;
-  if (index == 0 && !authorized(req)) {
-    ctx->err = "Login Required";
-    return;
+  if (index == 0) {
+    if (!authorized(req)) {
+      ctx->err = "Login Required";
+      return;
+    }
+    if (Update.isRunning()) {
+      ctx->err = "Update Already Running";
+      return;
+    }
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+      ctx->err = "No Update Partition";
+      return;
+    }
+    // A dropped connection must release Update, or every later begin() fails.
+    g_update_owner = req;
+    req->onDisconnect([req]() { release_update(req); });
   }
-  if (index == 0 && !Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
-    ctx->err = "No Update Partition";
-    return;
-  }
+  if (g_update_owner != req) return;
   if (Update.write(data, len) != len) {
-    Update.abort();
     ctx->err = "Firmware Write Failed";
+    release_update(req);
     return;
   }
   if (final) {
     if (Update.end(true)) ctx->done = true;
     else ctx->err = "Firmware Image Rejected";
+    release_update(req);
   }
 }
 
 static void on_update_done(AsyncWebServerRequest *req) {
   if (!authorized(req)) return ask_login(req);
+  release_update(req);  // body ended without a final chunk
   UploadCtx *ctx = (UploadCtx *)req->_tempObject;
   if (ctx && ctx->done) {
     req->send(200, "text/plain", "Firmware Updated\nRestarting now.\n");
