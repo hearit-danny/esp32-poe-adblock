@@ -22,6 +22,20 @@ Nothing new to install. PlatformIO is already at
 `$HOME/.platformio/penv/Scripts/pio.exe`, which works in PowerShell and Git Bash. Run them
 from the repo root.
 
+## 0. Admin password (one time)
+
+The status page, blocklist upload, block-mode switch and firmware update use HTTP basic auth
+with user `admin`. The password is built into the firmware from the `ADBLOCK_ADMIN_PASSWORD`
+environment variable, and the build stops if it is unset. Set it once for your user, then
+open a new shell so it is picked up:
+
+```bash
+setx ADBLOCK_ADMIN_PASSWORD "choose-a-password"
+```
+
+`scripts/build_blocklist.py --upload` reads the same variable. To change the password,
+change the variable and reflash. `/stats` (JSON counters) stays open without a login.
+
 ## 1. Build the firmware
 
 ```bash
@@ -55,10 +69,10 @@ $HOME/.platformio/penv/Scripts/pio.exe device monitor -b 115200 -p COMx
 ## 3. Later firmware updates (over Ethernet)
 
 After the first flash, new builds go over the network. Use the Firmware form on the status
-page, or:
+page, or (curl asks for the admin password):
 
 ```bash
-curl -F "firmware=@.pio/build/m5stack-u138/firmware.bin" http://192.168.1.159/update
+curl.exe -u admin -F "firmware=@.pio/build/m5stack-u138/firmware.bin" http://192.168.1.159/update
 ```
 
 The unit restarts into the new image about a second after the upload.
@@ -136,6 +150,6 @@ for the PTR record of 192.168.1.159 first and the public resolvers have none.
 
 ## Limits
 
-- The admin page has no password; anyone on the LAN can change the blocklist or firmware.
+- Basic auth over plain HTTP: the password crosses the LAN unencrypted on each admin request.
 - No cache of upstream answers yet; every allowed query goes upstream.
 - DNS listens on IPv4 only.
