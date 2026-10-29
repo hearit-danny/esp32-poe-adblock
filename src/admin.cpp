@@ -70,6 +70,9 @@ static String stats_json() {
   s += ",\"timeouts\":" + String(d.timeouts);
   s += ",\"dropped\":" + String(d.dropped);
   s += ",\"inflight\":" + String(d.inflight);
+  s += ",\"cache_hits\":" + String(d.cache_hits);
+  s += ",\"cache_entries\":" + String(d.cache_entries);
+  s += ",\"cache_bytes\":" + String(d.cache_bytes);
   s += ",\"upstream\":\"" + String(d.upstream) + "\"";
   s += ",\"block_mode\":\"" + String(d.nxdomain ? "nxdomain" : "zero") + "\"";
   s += ",\"blocklist_loaded\":" + String(b.loaded ? "true" : "false");
@@ -103,6 +106,9 @@ static String status_page() {
   String pct = d.queries ? String(100.0 * d.blocked / d.queries, 1) + "%" : "-";
   row(h, "Blocked", String(d.blocked) + " (" + pct + ")");
   row(h, "Forwarded", String(d.forwarded) + ", answered " + String(d.relayed) + ", timed out " + String(d.timeouts));
+  row(h, "Answer cache", d.cache_bytes ? String(d.cache_hits) + " hits, " + String(d.cache_entries) + " answers held (" +
+                                             String(d.cache_bytes / 1024) + " KB)"
+                                       : String("off"));
   row(h, "Dropped", String(d.dropped));
   row(h, "Upstream in use", String(d.upstream) + (String(d.upstream) == "1.1.1.1" ? "" : " (fallback)"));
   row(h, "Blocked answer", d.nxdomain ? "NXDOMAIN" : "0.0.0.0 / ::");
