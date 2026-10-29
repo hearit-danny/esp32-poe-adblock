@@ -139,9 +139,13 @@ for the PTR record of 192.168.1.159 first and the public resolvers have none.
   `commit_seq` left erased; after a CRC read-back the firmware programs `commit_seq` and
   swaps. Boot picks the committed slot with the highest sequence, so a power cut mid-upload
   leaves the old list active.
-- **Upstream.** Up to 32 queries in flight, matched by a rewritten transaction id and the
-  upstream address. No answer in 1 s: resend to the other upstream. No answer in 2 s: drop.
-  Three failures in a row switch the upstream in use; the primary is retried after 60 s.
+- **Upstream.** Up to 32 queries in flight, each with a fresh random 16-bit transaction id;
+  an answer must match the id, the upstream address and the question bytes. No answer in
+  1 s: resend to the other upstream. No answer in 2 s: drop. Three failures in a row switch
+  the upstream in use; the primary is retried after 60 s. The EDNS UDP size is capped at
+  1232 so answers fit one Ethernet frame.
+- **Sending.** All DNS packets go out from a `dns_tx` task, never from the AsyncUDP
+  receive task, which would deadlock the lwIP core lock when the receive queue is full.
 - **Block mode.** 0.0.0.0 / :: by default (`-DDNS_BLOCK_NXDOMAIN=0` in `platformio.ini`).
   The status page can switch to NXDOMAIN; that choice is stored in NVS.
 - **Memory.** The Bloom filter is four 32 KB blocks allocated once at boot (a single 128 KB
@@ -152,4 +156,7 @@ for the PTR record of 192.168.1.159 first and the public resolvers have none.
 
 - Basic auth over plain HTTP: the password crosses the LAN unencrypted on each admin request.
 - No cache of upstream answers yet; every allowed query goes upstream.
-- DNS listens on IPv4 only.
+- DNS listens on IPv4 UDP only. No TCP/53, so a client cannot retry a truncated answer
+  over TCP here; it usually falls back to another resolver.
+- Upstream queries leave from one fixed source port, so spoofing resistance rests on the
+  16-bit id and question match. Fine on a home LAN.
