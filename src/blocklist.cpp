@@ -312,13 +312,15 @@ bool blocklist_upload_commit(const char *&err) {
   uint32_t seq = g_active >= 0 ? g_hdr.commit_seq + 1 : 1;
   xSemaphoreGive(g_lock);
   if (seq == BLK_UNCOMMITTED) seq = 1;
-  if (esp_partition_write(part, offsetof(BlocklistHeader, commit_seq), &seq, sizeof(seq)) != ESP_OK) {
-    err = "Flash Write Failed";
-    return false;
-  }
+  // Switch in RAM first: if the map fails the slot stays uncommitted, so a
+  // reboot cannot pick up a list this boot refused.
   h.commit_seq = seq;
   if (!load_slot(g_up_slot, h)) {
     err = "Reload Failed";
+    return false;
+  }
+  if (esp_partition_write(part, offsetof(BlocklistHeader, commit_seq), &seq, sizeof(seq)) != ESP_OK) {
+    err = "Flash Write Failed";  // new list serves until reboot, then the old one returns
     return false;
   }
   Serial.printf("[blocklist] swapped to %s: seq %u, %u entries\n", SLOT_LABELS[g_up_slot], (unsigned)seq,
