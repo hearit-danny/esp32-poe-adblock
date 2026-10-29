@@ -13,6 +13,8 @@ time, so the two implementations cannot drift apart silently.
 """
 
 import argparse
+import base64
+import os
 import math
 import re
 import struct
@@ -164,16 +166,21 @@ def lookup(blob: bytes, name: str) -> bool:
     return False
 
 
-def upload(url: str, blob: bytes):
+def upload(url: str, blob: bytes, password: str):
     boundary = uuid.uuid4().hex
     body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"blocklist.bin\"\r\n"
             f"Content-Type: application/octet-stream\r\n\r\n").encode() + blob + f"\r\n--{boundary}--\r\n".encode()
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    # Sent up front so the file goes over once, rather than after a 401.
+    token = base64.b64encode(f"admin:{password}".encode()).decode()
+    req.add_header("Authorization", f"Basic {token}")
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             print(f"upload: HTTP {resp.status}: {resp.read().decode(errors='replace').strip()}")
     except urllib.error.HTTPError as e:
+        if e.code == 401:
+            sys.exit("upload failed: HTTP 401, the admin password does not match the firmware's")
         sys.exit(f"upload failed: HTTP {e.code}: {e.read().decode(errors='replace').strip()}")
 
 
@@ -186,6 +193,8 @@ def main():
     ap.add_argument("--k", type=int, help="bloom hash count (default: optimal for the entry count)")
     ap.add_argument("--no-prune", action="store_true", help="keep subdomains of listed domains")
     ap.add_argument("--upload", metavar="URL", help="POST the file, e.g. http://192.168.1.159/upload")
+    ap.add_argument("--password", default=os.environ.get("ADBLOCK_ADMIN_PASSWORD", ""),
+                    help="admin password for --upload (default: $ADBLOCK_ADMIN_PASSWORD)")
     ap.add_argument("--self-check", action="store_true", help="only run the hash self-check")
     args = ap.parse_args()
 
@@ -193,6 +202,8 @@ def main():
     self_check()
     if args.self_check:
         return
+    if args.upload and not args.password:
+        sys.exit("--upload needs the admin password: set ADBLOCK_ADMIN_PASSWORD or pass --password")
     if args.bloom_bits % 8 or args.bloom_bits // 8 > C["BLK_MAX_BLOOM_BYTES"]:
         sys.exit(f"--bloom-bits must be a multiple of 8 and at most {C['BLK_MAX_BLOOM_BYTES'] * 8}")
 
@@ -231,7 +242,7 @@ def main():
     args.out.write_bytes(blob)
     print(f"wrote {args.out}")
     if args.upload:
-        upload(args.upload, blob)
+        upload(args.upload, blob, args.password)
 
 
 if __name__ == "__main__":
