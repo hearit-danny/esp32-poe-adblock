@@ -9,7 +9,8 @@ status page, blocklist upload and firmware update are at http://192.168.1.159.
 ## Hardware
 
 - ESP32-WROOM-32U, 4 MB flash, no PSRAM, IP101G PHY over RMII (MDC 23, MDIO 18, PHY
-  address 1, 50 MHz clock into GPIO0), PoE powered. No USB port.
+  address 1, reset on GPIO5, 50 MHz clock into GPIO0), PoE powered. No USB port.
+- The Grove port is GPIO16/17, not the ESP32's flashing UART, so it cannot flash the unit.
 - The unit ships with ESP-AT firmware, which answers ping but listens on no TCP port.
 - IP comes from DHCP. Reserve 192.168.1.159 for the unit's MAC on the router; the MAC is
   printed on the serial log at boot (`[eth] ip ..., mac ...`).
