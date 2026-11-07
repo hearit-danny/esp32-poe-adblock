@@ -16,6 +16,7 @@ struct DnsStats {
   uint32_t cache_entries;  // answers held now
   uint32_t cache_bytes;    // cache size, 0 when off
   uint32_t port_changes;   // upstream socket moved to a new port after failures
+  uint32_t cname_blocked;  // allowed names whose answer aliased a blocked name (in blocked)
   const char *upstream;
   bool nxdomain;
 };

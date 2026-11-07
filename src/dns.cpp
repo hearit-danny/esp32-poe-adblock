@@ -179,6 +179,52 @@ static size_t skip_name(const uint8_t *m, size_t len, size_t pos) {
   return 0;
 }
 
+// Reads the possibly compressed name at pos into out (lowercase, dot
+// separated, 256 bytes). Returns its length, or 0 if it does not parse.
+static size_t read_name(const uint8_t *m, size_t len, size_t pos, char *out) {
+  size_t n = 0;
+  int jumps = 0;
+  while (pos < len) {
+    uint8_t l = m[pos];
+    if (l == 0) {
+      out[n] = 0;
+      return n;
+    }
+    if ((l & 0xC0) == 0xC0) {
+      if (pos + 1 >= len || ++jumps > 16) return 0;
+      pos = (size_t)(l & 0x3F) << 8 | m[pos + 1];
+      continue;
+    }
+    if ((l & 0xC0) || pos + 1 + l > len || n + l + 1 > 253) return 0;
+    if (n) out[n++] = '.';
+    for (uint8_t i = 1; i <= l; i++) {
+      char c = (char)m[pos + i];
+      out[n++] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
+    }
+    pos += 1 + l;
+  }
+  return 0;
+}
+
+// True if a CNAME in the answer section points at a blocked name. Ad-block
+// recovery services hide behind random names aliased to listed ones (seen
+// 2026-11-06 on tomshardware.com: stg.cow.magicalblouse.com -> html-load.com).
+static bool cname_blocked(const uint8_t *m, size_t len, size_t qend) {
+  char name[256];
+  size_t pos = qend;
+  unsigned an = rd16(m + 6);
+  while (an--) {
+    pos = skip_name(m, len, pos);
+    if (!pos || pos + 10 > len) return false;
+    if (rd16(m + pos) == 5) {
+      size_t n = read_name(m, len, pos + 10, name);
+      if (n && blocklist_contains(name, n)) return true;
+    }
+    pos += 10 + rd16(m + pos + 8);
+  }
+  return false;
+}
+
 // Offset of the OPT record's TYPE field, or 0 if the message has none.
 static size_t find_opt(const uint8_t *m, size_t len, size_t qend) {
   size_t pos = qend;
@@ -306,7 +352,10 @@ static bool cache_answer(const uint8_t *q, size_t len, size_t qend, const IPAddr
   for (CacheEntry &e : g_entries) {
     if (!e.len || e.key != key || e.flags != flags) continue;
     const uint8_t *r = g_cache + e.off;
-    if (!live(e, now) || e.len > limit || e.len < qend || !same_question(r, q, qend)) break;
+    // A list update since caching may have blocked a name in its CNAME chain.
+    if (!live(e, now) || e.len > limit || e.len < qend || !same_question(r, q, qend) ||
+        cname_blocked(r, e.len, qend))
+      break;
     buf = (uint8_t *)malloc(e.len);
     if (buf) {
       memcpy(buf, r, e.len);
@@ -488,11 +537,18 @@ static void on_upstream_packet(AsyncUDPPacket &p) {
     if (!s.used || s.up_id != id) continue;
     if (s.qend && (len < s.qend || memcmp(msg + HDR, s.query + HDR, s.qend - HDR) != 0)) break;
     g_fails[u] = 0;
-    cache_put_locked(msg, len, s);
-    wr16(msg, s.client_id);  // restore the client's id in place
-    queue_send(false, msg, len, s.client_ip, s.client_port);
+    if (s.qend && cname_blocked(msg, len, s.qend)) {
+      wr16(s.query, s.client_id);  // the blocked answer echoes the client's header
+      send_blocked(s.query, s.qend, rd16(s.query + s.qend - 4), s.client_ip, s.client_port);
+      g_stats.blocked++;
+      g_stats.cname_blocked++;
+    } else {
+      cache_put_locked(msg, len, s);
+      wr16(msg, s.client_id);  // restore the client's id in place
+      queue_send(false, msg, len, s.client_ip, s.client_port);
+      g_stats.relayed++;
+    }
     s.used = false;
-    g_stats.relayed++;
     break;
   }
   xSemaphoreGive(g_lock);

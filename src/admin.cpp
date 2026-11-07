@@ -74,6 +74,7 @@ static String stats_json() {
   s += ",\"cache_entries\":" + String(d.cache_entries);
   s += ",\"cache_bytes\":" + String(d.cache_bytes);
   s += ",\"port_changes\":" + String(d.port_changes);
+  s += ",\"cname_blocked\":" + String(d.cname_blocked);
   s += ",\"upstream\":\"" + String(d.upstream) + "\"";
   s += ",\"block_mode\":\"" + String(d.nxdomain ? "nxdomain" : "zero") + "\"";
   s += ",\"blocklist_loaded\":" + String(b.loaded ? "true" : "false");

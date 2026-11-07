@@ -164,6 +164,11 @@ status page's Answer cache row shows one more hit and the TTL is a little lower.
   tested against the Bloom filter in RAM; on a hit, binary search over the keys, read in
   place from the memory-mapped flash slot. The builder drops names already covered by a
   listed parent, since the suffix walk blocks those anyway.
+- **CNAME check.** An allowed name whose upstream answer aliases (CNAME) a blocked name gets
+  the blocked answer too, and cached answers are checked again before they are served.
+  Ad-block recovery services hide behind random names: on 2026-11-06 tomshardware.com put
+  its blocked Google ads back through `stg.cow.magicalblouse.com`, an alias of the listed
+  `html-load.com`. `cname_blocked` in `/stats` counts these; they are included in `blocked`.
 - **Bloom numbers.** m = 524,288 bits (64 KB). The builder picks k = round(m/n ln 2), capped
   at 16. On 2026-11-06 the hosts file had 77,758 names, 41,961 after pruning: k = 9,
   predicted false positive rate 2.5e-3 per name. A false positive costs one flash binary
