@@ -1,10 +1,10 @@
 # AdBlocker
 
-ESP32 PoE DNS ad blocker for the M5Stack ESP32 Ethernet Unit (U138) at 192.168.1.159.
+ESP32 PoE DNS ad blocker for the M5Stack ESP32 Ethernet Unit (U138) at 192.168.1.53.
 
 It answers DNS on UDP 53. Names on the blocklist (and their subdomains) get `0.0.0.0` / `::`
 with a 10 s TTL. Everything else is relayed to 1.1.1.1, with 8.8.8.8 as the fallback. The
-status page, blocklist upload and firmware update are at http://192.168.1.159.
+status page, blocklist upload and firmware update are at http://192.168.1.53.
 
 ## Hardware
 
@@ -12,8 +12,10 @@ status page, blocklist upload and firmware update are at http://192.168.1.159.
   address 1, reset on GPIO5, 50 MHz clock into GPIO0), PoE powered. No USB port.
 - The Grove port is GPIO16/17, not the ESP32's flashing UART, so it cannot flash the unit.
 - The unit ships with ESP-AT firmware, which answers ping but listens on no TCP port.
-- IP comes from DHCP. Reserve 192.168.1.159 for the unit's MAC on the router; the MAC is
-  printed on the serial log at boot (`[eth] ip ..., mac ...`).
+- IP comes from DHCP, reserved on the router as 192.168.1.53 (53 is the DNS port) for the
+  Ethernet MAC 20:E7:C8:28:08:A3, which is also on the serial log at boot. A new
+  reservation takes effect after the router applies it and the unit restarts; a firmware
+  update restarts it.
 
 ## Tools
 
@@ -74,7 +76,7 @@ With the unit powered from the downloader, the log shows `emac_esp32_init: reset
 and Ethernet does not start; this happens before any link check, so a cable makes no
 difference. Seen 2026-11-06, cause not isolated: the downloader's BOOT line sits on GPIO0,
 which carries the PHY's 50 MHz clock, and its 3.3 V supply may be too weak for the PHY.
-Remove the downloader and plug the unit into PoE; it comes up at 192.168.1.159.
+Remove the downloader and plug the unit into PoE; it comes up at 192.168.1.53.
 
 ## 3. Later firmware updates (over Ethernet)
 
@@ -82,7 +84,7 @@ After the first flash, new builds go over the network. Use the Firmware form on 
 page, or (curl asks for the admin password):
 
 ```bash
-curl.exe -u admin -F "firmware=@.pio/build/m5stack-u138/firmware.bin" http://192.168.1.159/update
+curl.exe -u admin -F "firmware=@.pio/build/m5stack-u138/firmware.bin" http://192.168.1.53/update
 ```
 
 The unit restarts into the new image about a second after the upload.
@@ -99,7 +101,7 @@ python -I scripts/build_blocklist.py
 Build and push to the unit in one step:
 
 ```bash
-python -I scripts/build_blocklist.py --upload http://192.168.1.159/upload
+python -I scripts/build_blocklist.py --upload http://192.168.1.53/upload
 ```
 
 The unit writes the file to its inactive flash slot, verifies it and swaps to it without a
@@ -108,23 +110,23 @@ pick up list changes. `--hosts FILE` builds from a local copy instead of downloa
 
 ## 5. Point the network at it
 
-On the router, set the DHCP DNS server to 192.168.1.159. Clients pick it up when their lease
+On the router, set the DHCP DNS server to 192.168.1.53. Clients pick it up when their lease
 renews; reconnect a client to pick it up now.
 
 ## 6. Test
 
 ```bash
-nslookup doubleclick.net 192.168.1.159
+nslookup doubleclick.net 192.168.1.53
 ```
 
 Expected: `Address: 0.0.0.0` (plus `::` for the AAAA query).
 
 ```bash
-nslookup example.com 192.168.1.159
+nslookup example.com 192.168.1.53
 ```
 
 Expected: real addresses from upstream. In both, `Server: UnKnown` is normal; nslookup asks
-for the PTR record of 192.168.1.159 first and the public resolvers have none.
+for the PTR record of 192.168.1.53 first and the public resolvers have none.
 
 Run the `example.com` lookup twice: the second answer comes from the cache, so the
 status page's Answer cache row shows one more hit and the TTL is a little lower.

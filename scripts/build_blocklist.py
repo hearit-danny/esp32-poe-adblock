@@ -3,7 +3,7 @@
 Run with the isolated interpreter (stdlib only):
 
     python -I scripts/build_blocklist.py
-    python -I scripts/build_blocklist.py --upload http://192.168.1.159/upload
+    python -I scripts/build_blocklist.py --upload http://192.168.1.53/upload
 
 The hash algorithm and file layout are defined once, in src/fnv.h and
 src/blocklist_format.h. This script reads its constants from those headers and
@@ -192,7 +192,7 @@ def main():
     ap.add_argument("--bloom-bits", type=int, default=DEFAULT_BLOOM_BITS)
     ap.add_argument("--k", type=int, help="bloom hash count (default: optimal for the entry count)")
     ap.add_argument("--no-prune", action="store_true", help="keep subdomains of listed domains")
-    ap.add_argument("--upload", metavar="URL", help="POST the file, e.g. http://192.168.1.159/upload")
+    ap.add_argument("--upload", metavar="URL", help="POST the file, e.g. http://192.168.1.53/upload")
     ap.add_argument("--password", default=os.environ.get("ADBLOCK_ADMIN_PASSWORD", ""),
                     help="admin password for --upload (default: $ADBLOCK_ADMIN_PASSWORD)")
     ap.add_argument("--self-check", action="store_true", help="only run the hash self-check")
