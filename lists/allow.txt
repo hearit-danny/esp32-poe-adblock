@@ -1,0 +1,6 @@
+# Names to unblock when something on the network breaks.
+# One name per line; each name also unblocks everything under it.
+# A name cannot be unblocked while a parent of it stays blocked; the builder
+# says which parent to add here instead.
+# Rebuild and upload after editing:
+#   python -I scripts/build_blocklist.py --upload http://192.168.1.53/upload

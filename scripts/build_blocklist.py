@@ -109,6 +109,40 @@ def parse_hosts(text: str):
     return domains
 
 
+def read_list(path: Path):
+    """One name per line, '#' comments; hosts-file lines ('0.0.0.0 name') work too."""
+    names = set()
+    for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        words = line.split("#", 1)[0].split()
+        if words and IPV4_RE.match(words[0]):
+            words = words[1:]
+        for raw in words:
+            d = normalise(raw)
+            if DOMAIN_RE.match(d) and not IPV4_RE.match(d):
+                names.add(d)
+            else:
+                print(f"  {path.name}:{no}: skipped {raw!r}, not a domain name")
+    return names
+
+
+def is_under(name: str, parent: str) -> bool:
+    return name == parent or name.endswith("." + parent)
+
+
+def apply_allow(domains, allowed):
+    """Removes each allowed name and every listed name under it. Returns the
+    allowed names a listed parent still blocks, since the firmware blocks a
+    name when any parent suffix is listed."""
+    kept = {d for d in domains if not any(is_under(d, a) for a in allowed)}
+    still = {}
+    for a in allowed:
+        parts = a.split(".")
+        parent = next((".".join(parts[i:]) for i in range(1, len(parts) - 1) if ".".join(parts[i:]) in kept), None)
+        if parent:
+            still[a] = parent
+    return kept, len(domains) - len(kept), still
+
+
 def prune_covered(domains):
     """Drop names whose parent suffix is already listed. The firmware checks
     every parent suffix, so a listed apex already blocks its subdomains."""
@@ -188,6 +222,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--hosts", type=Path, help="read this hosts file instead of downloading")
     ap.add_argument("--save-hosts", type=Path, help="also save the downloaded hosts file here")
+    ap.add_argument("--block", type=Path, default=ROOT / "lists" / "block.txt",
+                    help="extra names to block, with their subdomains (default: lists/block.txt)")
+    ap.add_argument("--allow", type=Path, default=ROOT / "lists" / "allow.txt",
+                    help="names to unblock, with their subdomains (default: lists/allow.txt)")
     ap.add_argument("--out", type=Path, default=ROOT / "blocklist.bin")
     ap.add_argument("--bloom-bits", type=int, default=DEFAULT_BLOOM_BITS)
     ap.add_argument("--k", type=int, help="bloom hash count (default: optimal for the entry count)")
@@ -217,14 +255,21 @@ def main():
             args.save_hosts.write_text(text, encoding="utf-8")
 
     parsed = parse_hosts(text)
-    domains = sorted(parsed) if args.no_prune else sorted(prune_covered(parsed))
+    extra = read_list(args.block) if args.block.exists() else set()
+    allowed = read_list(args.allow) if args.allow.exists() else set()
+    merged, removed, still_blocked = apply_allow(parsed | extra, allowed)
+    domains = sorted(merged) if args.no_prune else sorted(prune_covered(merged))
     n, m = len(domains), args.bloom_bits
     k = args.k or max(1, min(C["BLK_MAX_K"], round(m / n * math.log(2))))
     blob, entries, collisions = build(domains, m, k)
     fpr = (1 - math.exp(-k * n / m)) ** k
 
     print(f"domains parsed:      {len(parsed)}")
-    print(f"entries written:     {entries}" + ("" if args.no_prune else f" ({len(parsed) - n} subdomains of listed names pruned)"))
+    print(f"block list:          {len(extra)} names, {len(extra - parsed)} not already in the hosts file")
+    print(f"allow list:          {len(allowed)} names, {removed} listed names removed")
+    for a, parent in sorted(still_blocked.items()):
+        print(f"  allow list: {a} stays blocked because {parent} is listed; allow {parent} instead")
+    print(f"entries written:     {entries}" + ("" if args.no_prune else f" ({len(merged) - n} subdomains of listed names pruned)"))
     print(f"40-bit collisions:   {collisions}")
     print(f"bloom:               {m} bits ({m // 8192} KB), k={k}, {m / n:.2f} bits/entry")
     print(f"bloom false positive {fpr:.2e} per name checked (a hit costs one flash binary search)")
@@ -233,7 +278,12 @@ def main():
     if len(blob) > slot:
         sys.exit("blocklist does not fit the blk_a/blk_b slot in partitions.csv")
 
-    for name, want in (("doubleclick.net", True), ("ads.doubleclick.net", True), ("example.com", False)):
+    checks = [("doubleclick.net", True), ("ads.doubleclick.net", True), ("example.com", False)]
+    unblocked = allowed - set(still_blocked)
+    checks = [(d, w) for d, w in checks if not any(is_under(d, a) for a in unblocked)]
+    checks += [(d, True) for d in sorted(extra) if not any(is_under(d, a) for a in unblocked)]
+    checks += [(a, False) for a in sorted(unblocked)] + [(a, True) for a in sorted(still_blocked)]
+    for name, want in checks:
         got = lookup(blob, name)
         print(f"  lookup {'ok ' if got == want else 'BAD'} {name:<22} {'blocked' if got else 'allowed'}")
         if got != want:

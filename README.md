@@ -105,8 +105,21 @@ python -I scripts/build_blocklist.py --upload http://192.168.1.53/upload
 ```
 
 The unit writes the file to its inactive flash slot, verifies it and swaps to it without a
-reboot. The status page shows the new entry count and build date. Re-run weekly or so to
-pick up list changes. `--hosts FILE` builds from a local copy instead of downloading.
+reboot. The status page shows the new entry count and build date. The unit does not fetch
+lists itself: re-run the upload weekly or so to pick up StevenBlack's changes. `--hosts
+FILE` builds from a local copy instead of downloading.
+
+Your own additions live in two files the builder reads on every run:
+
+- `lists/block.txt`: extra names to block, each with everything under it. It starts with
+  LG's viewing-data server `ngfts.lge.com`, which StevenBlack does not list.
+- `lists/allow.txt`: names to unblock when something breaks, each with everything under
+  it. A name stays blocked while a parent of it is listed; the builder prints which parent
+  to allow instead.
+
+One name per line, `#` for comments. The builder prints how many names each list added or
+removed and checks every listed name against the built file before writing it. The repo
+is public, so both files are visible to anyone who opens it.
 
 ## 5. Point the network at it
 

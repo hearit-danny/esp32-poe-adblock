@@ -1,0 +1,7 @@
+# Extra names to block, on top of the StevenBlack hosts list.
+# One name per line; each name also blocks everything under it.
+# Rebuild and upload after editing:
+#   python -I scripts/build_blocklist.py --upload http://192.168.1.53/upload
+
+# LG TV viewing data (Live Plus); StevenBlack does not list it (checked 2026-11-06).
+ngfts.lge.com
