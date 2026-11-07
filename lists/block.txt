@@ -5,3 +5,9 @@
 
 # LG TV viewing data (Live Plus); StevenBlack does not list it (checked 2026-11-06).
 ngfts.lge.com
+
+# Ad-block recovery: tomshardware.com re-fetches its blocked Google ads through
+# this random-word domain (seen 2026-11-06). Such domains change over time.
+magicalblouse.com
+# Ads in the Firework video player on tomshardware.com (seen 2026-11-06).
+fireworkadservices1.com
