@@ -47,8 +47,11 @@ $HOME/.platformio/penv/Scripts/pio.exe run -e m5stack-u138
 
 The U138 has no USB port. M5Stack's documented route is to remove the case and connect the
 M5Stack ESP32 Downloader to the reserved program download interface on the board
-(https://docs.m5stack.com/en/unit/poesp32). Once the downloader is plugged into the PC, find
-its COM port:
+(https://docs.m5stack.com/en/unit/poesp32). The header holes read GND, G0, EN, RX, TX, 3V3,
+the same order as the downloader's pins, so the downloader presses straight in with nothing
+soldered; tilt it slightly to keep contact. Unplug PoE and the Grove cable first: the
+downloader powers the unit. The Grove port (GPIO16/17) cannot flash it. Once the downloader
+is plugged into the PC (a CH340 on 2026-11-06, COM6), find its COM port:
 
 ```bash
 $HOME/.platformio/penv/Scripts/pio.exe device list
@@ -66,6 +69,10 @@ Watch the boot log (IP, link speed, blocklist entry count, Bloom size, free heap
 ```bash
 $HOME/.platformio/penv/Scripts/pio.exe device monitor -b 115200 -p COMx
 ```
+
+Ethernet does not start while the downloader is attached (`emac_esp32_init: reset timeout`
+in the log): its BOOT line sits on GPIO0, which carries the PHY's 50 MHz clock. Remove the
+downloader and plug the unit into PoE; it comes up at 192.168.1.159.
 
 ## 3. Later firmware updates (over Ethernet)
 
