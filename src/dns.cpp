@@ -45,7 +45,7 @@ static constexpr uint8_t FAILS_TO_SWITCH = 3;
 static constexpr uint32_t PRIMARY_RETRY_MS = 60000;
 static constexpr int TX_QUEUE = 32;
 static constexpr int CACHE_ENTRIES = 256;
-static constexpr size_t CACHE_MIN_FREE_HEAP = 65536;  // left for TCP, uploads and OTA
+static constexpr size_t CACHE_MIN_FREE_HEAP = 49152;  // left for TCP, uploads and OTA
 
 static const IPAddress UPSTREAMS[2] = {IPAddress(1, 1, 1, 1), IPAddress(8, 8, 8, 8)};
 static const char *const UPSTREAM_NAMES[2] = {"1.1.1.1", "8.8.8.8"};
@@ -500,7 +500,7 @@ void dns_begin() {
   g_txq = xQueueCreate(TX_QUEUE, sizeof(Outgoing));
   xTaskCreatePinnedToCore(tx_task, "dns_tx", 4096, nullptr, 3, nullptr, tskNO_AFFINITY);
   Preferences prefs;
-  if (prefs.begin("adblock", true)) {
+  if (prefs.begin("adblock", false)) {  // read-write: creates the namespace on first boot
     g_nxdomain = prefs.getBool("nxdomain", DNS_BLOCK_NXDOMAIN);
     prefs.end();
   }
