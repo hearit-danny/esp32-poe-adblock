@@ -27,7 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 HOSTS_URL = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
-DEFAULT_BLOOM_BITS = 1 << 20  # 128 KB, the firmware's RAM buffer
+DEFAULT_BLOOM_BITS = 1 << 19  # 64 KB, the firmware's RAM buffer
 
 # Hostnames the hosts file maps for the local machine, not for blocking.
 LOCAL_NAMES = {

@@ -127,17 +127,17 @@ status page's Answer cache row shows one more hit and the TTL is a little lower.
   `static_assert`, and the Python builder checks the same lines with its own implementation,
   so the two cannot drift. `python -I scripts/build_blocklist.py --self-check` runs only
   that check.
-- **File.** `blocklist.bin` = 64-byte header + 128 KB Bloom filter + sorted packed 40-bit
+- **File.** `blocklist.bin` = 64-byte header + 64 KB Bloom filter + sorted packed 40-bit
   keys (5 bytes each), CRC-32 over the payload. Layout in `src/blocklist_format.h`.
 - **Lookup.** The full name and each parent suffix (`ads.example.com`, `example.com`) is
   tested against the Bloom filter in RAM; on a hit, binary search over the keys, read in
   place from the memory-mapped flash slot. The builder drops names already covered by a
   listed parent, since the suffix walk blocks those anyway.
-- **Bloom numbers.** m = 1,048,576 bits. The builder picks k = round(m/n ln 2), capped at 16.
-  On 2026-10-28 the hosts file had 76,147 names, 41,367 after pruning: k = 16, predicted
-  false positive rate 5.3e-6 per name. A false positive costs one flash binary search, never
-  a wrong answer. For reference, the original estimate of 140k names at k = 5 gives 2.7%, not
-  1%.
+- **Bloom numbers.** m = 524,288 bits (64 KB). The builder picks k = round(m/n ln 2), capped
+  at 16. On 2026-11-06 the hosts file had 77,758 names, 41,961 after pruning: k = 9,
+  predicted false positive rate 2.5e-3 per name. A false positive costs one flash binary
+  search, never a wrong answer. The filter was 128 KB until the first boot on hardware
+  showed that left too little heap for the web server's task.
 - **Flash.** Two OTA app slots of 1.44 MB and two blocklist slots of 544 KB (about 85k
   entries each), in `partitions.csv`. An upload goes to the inactive slot with its
   `commit_seq` left erased; after a CRC read-back the firmware programs `commit_seq` and
@@ -154,14 +154,14 @@ status page's Answer cache row shows one more hit and the TTL is a little lower.
   keyed on the question plus the RD, CD, EDNS and DO bits, so an EDNS answer never goes to a
   client that sent none. The store is a 24 KB ring (`-DDNS_CACHE_BYTES`, 0 turns it off)
   with up to 256 answers, allocated after the Bloom filter and shrunk if that would leave
-  under 64 KB of heap. Blocked names are checked first, so a list upload takes effect at
+  under 48 KB of heap. Blocked names are checked first, so a list upload takes effect at
   once. The status page shows hits and answers held.
 - **Sending.** All DNS packets go out from a `dns_tx` task, never from the AsyncUDP
   receive task, which would deadlock the lwIP core lock when the receive queue is full.
 - **Block mode.** 0.0.0.0 / :: by default (`-DDNS_BLOCK_NXDOMAIN=0` in `platformio.ini`).
   The status page can switch to NXDOMAIN; that choice is stored in NVS.
-- **Memory.** The Bloom filter is four 32 KB blocks allocated once at boot (a single 128 KB
-  block often does not exist on a PSRAM-less ESP32). Uploads stream to flash in 4 KB pages.
+- **Memory.** The Bloom filter is two 32 KB blocks allocated once at boot (a single 64 KB
+  block is not always free on a PSRAM-less ESP32). Uploads stream to flash in 4 KB pages.
   Free heap is on the serial log and the status page.
 
 ## Limits

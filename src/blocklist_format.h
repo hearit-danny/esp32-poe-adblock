@@ -20,7 +20,7 @@ constexpr uint32_t BLK_MAGIC = 0x4C424441UL;  // "ADBL"
 constexpr uint32_t BLK_VERSION = 1UL;
 constexpr uint32_t BLK_HEADER_SIZE = 64UL;
 constexpr uint32_t BLK_KEY_BYTES = 5UL;
-constexpr uint32_t BLK_MAX_BLOOM_BYTES = 131072UL;  // RAM buffer allocated at boot
+constexpr uint32_t BLK_MAX_BLOOM_BYTES = 65536UL;  // RAM buffer allocated at boot; 128 KB left too little heap
 constexpr uint32_t BLK_MAX_K = 16UL;
 constexpr uint32_t BLK_UNCOMMITTED = 0xFFFFFFFFUL;
 
