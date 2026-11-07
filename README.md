@@ -157,7 +157,10 @@ status page's Answer cache row shows one more hit and the TTL is a little lower.
 - **Upstream.** Up to 32 queries in flight, each with a fresh random 16-bit transaction id;
   an answer must match the id, the upstream address and the question bytes. No answer in
   1 s: resend to the other upstream. No answer in 2 s: drop. Three failures in a row switch
-  the upstream in use; the primary is retried after 60 s. The EDNS UDP size is capped at
+  the upstream in use and move the upstream socket to a new source port: on 2026-11-06,
+  after a router restart, the router kept a broken NAT entry for the old port alive and no
+  answer came back until the unit rebooted. `port_changes` in `/stats` counts the moves.
+  The primary is retried after 60 s. The EDNS UDP size is capped at
   1232 so answers fit one Ethernet frame.
 - **Answer cache.** Complete NOERROR and NXDOMAIN answers are kept for their smallest TTL,
   at most 1 hour (`-DDNS_CACHE_MAX_TTL`). A repeat question is answered from RAM with the
@@ -181,5 +184,5 @@ status page's Answer cache row shows one more hit and the TTL is a little lower.
 - The answer cache lives in RAM only, so a reboot or firmware update empties it.
 - DNS listens on IPv4 UDP only. No TCP/53, so a client cannot retry a truncated answer
   over TCP here; it usually falls back to another resolver.
-- Upstream queries leave from one fixed source port, so spoofing resistance rests on the
-  16-bit id and question match. Fine on a home LAN.
+- Upstream queries share one source port, which changes only after failures, so spoofing
+  resistance rests on the 16-bit id and question match. Fine on a home LAN.

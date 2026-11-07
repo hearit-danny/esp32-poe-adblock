@@ -91,6 +91,7 @@ static Slot g_slots[SLOTS];
 static uint8_t g_cur;  // upstream in use
 static uint8_t g_fails[2];
 static uint32_t g_switched_ms;
+static bool g_rebind;  // move the upstream socket to a new port (dns_loop only)
 static bool g_nxdomain = DNS_BLOCK_NXDOMAIN;
 static DnsStats g_stats;
 // Answers are written into g_cache as a ring, overwriting the oldest bytes.
@@ -388,7 +389,9 @@ static void note_fail_locked(uint8_t u) {
     g_cur = 1 - u;
     g_fails[g_cur] = 0;
     g_switched_ms = millis();
-    Serial.printf("[dns] upstream %s not answering, switching to %s\n", UPSTREAM_NAMES[u], UPSTREAM_NAMES[g_cur]);
+    g_rebind = true;
+    Serial.printf("[dns] upstream %s not answering, switching to %s on a new port\n", UPSTREAM_NAMES[u],
+                  UPSTREAM_NAMES[g_cur]);
   }
 }
 
@@ -536,6 +539,16 @@ void dns_loop() {
     Serial.printf("[dns] trying primary upstream %s again\n", UPSTREAM_NAMES[0]);
   }
   xSemaphoreGive(g_lock);
+  // Seen 2026-11-06: after a router restart every upstream answer stopped
+  // until the unit rebooted, while the PC (a new port per lookup) was fine.
+  // A NAT entry made while the WAN was down stays alive as long as we keep
+  // sending from the same port, so give up on the port along with the
+  // upstream. listen(0) rebinds the same pcb through lwIP's API.
+  if (g_rebind) {
+    g_rebind = false;
+    if (g_upstream.listen(0)) g_stats.port_changes++;
+    else Serial.println("[dns] could not move the upstream socket to a new port");
+  }
 }
 
 DnsStats dns_stats() {

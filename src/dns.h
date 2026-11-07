@@ -15,6 +15,7 @@ struct DnsStats {
   uint32_t cache_hits;     // answered from the upstream answer cache
   uint32_t cache_entries;  // answers held now
   uint32_t cache_bytes;    // cache size, 0 when off
+  uint32_t port_changes;   // upstream socket moved to a new port after failures
   const char *upstream;
   bool nxdomain;
 };
