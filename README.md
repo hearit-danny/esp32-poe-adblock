@@ -109,6 +109,13 @@ reboot. The status page shows the new entry count and build date. The unit does 
 lists itself: re-run the upload weekly or so to pick up StevenBlack's changes. `--hosts
 FILE` builds from a local copy instead of downloading.
 
+On this PC a Windows scheduled task, **AdBlocker blocklist update**, does that every Sunday
+at 09:00, or at the next logon if the PC was off. It runs `scripts/update_blocklist.ps1` from
+`C:\Users\DannyHearit\AdBlocker` (keep that checkout on `main`), and the last run's output is
+in `%LOCALAPPDATA%\AdBlocker\blocklist-update.log`. Run it now with
+`Start-ScheduledTask -TaskName "AdBlocker blocklist update"`, or remove it with
+`Unregister-ScheduledTask -TaskName "AdBlocker blocklist update"`.
+
 Your own additions live in two files the builder reads on every run:
 
 - `lists/block.txt`: extra names to block, each with everything under it. It starts with
