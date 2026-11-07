@@ -70,9 +70,11 @@ Watch the boot log (IP, link speed, blocklist entry count, Bloom size, free heap
 $HOME/.platformio/penv/Scripts/pio.exe device monitor -b 115200 -p COMx
 ```
 
-Ethernet does not start while the downloader is attached (`emac_esp32_init: reset timeout`
-in the log): its BOOT line sits on GPIO0, which carries the PHY's 50 MHz clock. Remove the
-downloader and plug the unit into PoE; it comes up at 192.168.1.159.
+With the unit powered from the downloader, the log shows `emac_esp32_init: reset timeout`
+and Ethernet does not start; this happens before any link check, so a cable makes no
+difference. Seen 2026-11-06, cause not isolated: the downloader's BOOT line sits on GPIO0,
+which carries the PHY's 50 MHz clock, and its 3.3 V supply may be too weak for the PHY.
+Remove the downloader and plug the unit into PoE; it comes up at 192.168.1.159.
 
 ## 3. Later firmware updates (over Ethernet)
 
