@@ -47,8 +47,14 @@ void setup() {
   log_heap("boot");
 
   Network.onEvent(on_net_event);
-  if (!ETH.begin(ETH_PHY_IP101, ETH_PHY_ADDR_U138, ETH_PHY_MDC_U138, ETH_PHY_MDIO_U138, ETH_PHY_POWER_U138,
-                 ETH_CLOCK_GPIO0_IN)) {
+  // The board holds the IP101G in reset, and so its 50 MHz clock into GPIO0
+  // off, until GPIO5 goes high. The EMAC needs that clock while ETH.begin()
+  // initialises it, so release the PHY first; ETH.begin() only pulses its
+  // reset pin after that point.
+  pinMode(ETH_PHY_POWER_U138, OUTPUT);
+  digitalWrite(ETH_PHY_POWER_U138, HIGH);
+  delay(20);
+  if (!ETH.begin(ETH_PHY_IP101, ETH_PHY_ADDR_U138, ETH_PHY_MDC_U138, ETH_PHY_MDIO_U138, -1, ETH_CLOCK_GPIO0_IN)) {
     Serial.println("[eth] ETH.begin failed");
   }
   log_heap("after ethernet");
