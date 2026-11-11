@@ -109,12 +109,20 @@ reboot. The status page shows the new entry count and build date. The unit does 
 lists itself: re-run the upload weekly or so to pick up StevenBlack's changes. `--hosts
 FILE` builds from a local copy instead of downloading.
 
-On this PC a Windows scheduled task, **AdBlocker blocklist update**, does that every Sunday
-at 09:00, or at the next logon if the PC was off. It runs `scripts/update_blocklist.ps1` from
-`C:\Users\DannyHearit\AdBlocker` (keep that checkout on `main`), and the last run's output is
-in `%LOCALAPPDATA%\AdBlocker\blocklist-update.log`. Run it now with
-`Start-ScheduledTask -TaskName "AdBlocker blocklist update"`, or remove it with
-`Unregister-ScheduledTask -TaskName "AdBlocker blocklist update"`.
+On this PC a Windows scheduled task, **AdBlocker blocklist update**, runs
+`scripts/update_blocklist.ps1` daily at 09:00 and 5 minutes after logon, from
+`C:\Users\DannyHearit\AdBlocker` (keep that checkout on `main`). The script reads
+`build_time` from `/stats` and does nothing while the unit's list is under 6.5 days old, so
+the list is rebuilt about weekly. A daily check replaced the weekly trigger after a Sunday
+run on 2026-11-08 started during a brief wake from sleep and was stopped when the PC slept
+again. The last update's output, then one line per skipped run, is in
+`%LOCALAPPDATA%\AdBlocker\blocklist-update.log`. Update now, whatever the list's age:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update_blocklist.ps1 -Force
+```
+
+Remove the task with `Unregister-ScheduledTask -TaskName "AdBlocker blocklist update"`.
 
 Your own additions live in two files the builder reads on every run:
 
